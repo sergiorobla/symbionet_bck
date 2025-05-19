@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import { Server } from "socket.io";
 import { createServer } from "http";
 import { authMiddleware } from "./middlewares/auth.js";
+import jwkToPem from "jwk-to-pem";
 
 dotenv.config();
 
