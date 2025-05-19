@@ -203,16 +203,10 @@ app.post("/register", async (req, res) => {
 async function verifySignature(message, signatureBase64, publicKeyJwk) {
   try {
     const publicKeyPem = jwkToPem(publicKeyJwk);
-
-    console.log("Mensaje para verificar:", message);
-    console.log("Clave pública PEM:", publicKeyPem);
     const verify = crypto.createVerify("SHA256");
     verify.update(message);
     verify.end();
-
     const signature = Buffer.from(signatureBase64, "base64");
-    console.log("Firma buffer hex:", signature.toString("hex"));
-
     const isValid = verify.verify(publicKeyPem, signature);
     console.log("Firma válida:", isValid);
     return isValid;
