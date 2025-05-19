@@ -9,14 +9,14 @@ import { authMiddleware } from "./middlewares/auth.js";
 dotenv.config();
 
 const app = express();
-
+const { Pool } = pg;
 const httpServer = createServer(app);
 
 app.use(
   cors({
     origin: [
       "https://localhost:3000", // para desarrollo local
-      "https://symbionet-phi.vercel.app"
+      "https://symbionet-phi.vercel.app",
     ],
     credentials: true,
   })
@@ -51,12 +51,15 @@ io.on("connection", (socket) => {
   });
 });
 
-const pool = new pg.Pool({
+const pool = new Pool({
   host: process.env.PGHOST,
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   port: process.env.PGPORT,
+  ssl: {
+    rejectUnauthorized: false,
+  },
 });
 
 app.use(express.json());
