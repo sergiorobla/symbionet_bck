@@ -2,27 +2,30 @@ import express from "express";
 import pg from "pg";
 import cors from "cors";
 import dotenv from "dotenv";
-import jwkToPem from "jwk-to-pem";
-import crypto from "crypto";
-import { authMiddleware } from "./middlewares/auth.js";
-import { createServer } from "https";
-import fs from "fs";
-import path from "path";
+import { Server } from "socket.io";
+import { createServer } from "http";
 import { Server } from "socket.io";
 
 dotenv.config();
 
 const app = express();
-const httpsOptions = {
-  key: fs.readFileSync(path.join("certs", "localhost-key.pem")),
-  cert: fs.readFileSync(path.join("certs", "localhost.pem")),
-};
 
-const httpServer = createServer(httpsOptions, app);
+const httpServer = createServer(app);
+
+app.use(
+  cors({
+    origin: [
+      "https://localhost:3000", // para desarrollo local
+      "https://symbionet-phi.vercel.app"
+    ],
+    credentials: true,
+  })
+);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: "https://localhost:3000",
+    origin: ["https://localhost:3000", "https://symbionet-phi.vercel.app"],
+    credentials: true,
   },
 });
 
@@ -57,7 +60,6 @@ const pool = new pg.Pool({
 });
 
 app.use(express.json());
-app.use(cors());
 
 app.get("/", (req, res) => {
   res.send("SymbioNet backend is running");
@@ -430,8 +432,6 @@ app.get("/user/:id", async (req, res) => {
     res.status(500).json({ error: "Error al obtener usuario" });
   }
 });
-
-
 
 // PARTE DEL /admin PARA ADMINISTRAR LA PAGINA ------------------------------------------------------------------------------------
 
