@@ -13,7 +13,10 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import cookieParser from "cookie-parser";
 import jwkToPem from "jwk-to-pem";
-import { authMiddleware, checkAdminAuth } from "./middlewares/auth.js";
+import {
+  jwtAuthMiddleware as authMiddleware,
+  checkAdminAuth,
+} from "./middlewares/auth.js";
 
 dotenv.config();
 
