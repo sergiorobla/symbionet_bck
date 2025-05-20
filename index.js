@@ -13,7 +13,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import cookieParser from "cookie-parser";
 import jwkToPem from "jwk-to-pem";
-import { authMiddleware, checkAdminAuth  } from "./middlewares/auth.js";
+import { authMiddleware, checkAdminAuth } from "./middlewares/auth.js";
 
 dotenv.config();
 
@@ -137,6 +137,28 @@ function verifyToken(req, res, next) {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
+
+    // Si la ruta recibe public_key o publicKey en el body, compárala con la del token
+    if (req.body?.public_key) {
+      const bodyKey = normalizeJwk(req.body.public_key);
+      if (bodyKey !== decoded.public_key) {
+        return res
+          .status(403)
+          .json({
+            error: "No autorizado: clave pública no coincide con el token",
+          });
+      }
+    }
+    if (req.body?.publicKey) {
+      const bodyKey = normalizeJwk(req.body.publicKey);
+      if (bodyKey !== decoded.public_key) {
+        return res
+          .status(403)
+          .json({
+            error: "No autorizado: clave pública no coincide con el token",
+          });
+      }
+    }
     next();
   } catch {
     return res.status(401).json({ error: "Token inválido" });
@@ -190,8 +212,14 @@ app.post(
         "SELECT * FROM users WHERE public_key = $1",
         [normalizedKey]
       );
-      const accessToken = generateAccessToken({ username });
-      const refreshToken = generateRefreshToken({ username });
+      const accessToken = generateAccessToken({
+        username,
+        public_key: normalizedKey,
+      });
+      const refreshToken = generateRefreshToken({
+        username,
+        public_key: normalizedKey,
+      });
 
       res
         .cookie("refreshToken", refreshToken, {
@@ -220,8 +248,22 @@ app.post("/refresh", (req, res) => {
 
   try {
     const payload = jwt.verify(token, process.env.REFRESH_SECRET);
-    const newAccessToken = generateAccessToken({ username: payload.username });
-    res.json({ accessToken: newAccessToken });
+    // Busca la clave pública del usuario en la base de datos
+    pool
+      .query("SELECT public_key FROM users WHERE username = $1", [
+        payload.username,
+      ])
+      .then((userRes) => {
+        const userPublicKey = userRes.rows[0]?.public_key;
+        const newAccessToken = generateAccessToken({
+          username: payload.username,
+          public_key: userPublicKey,
+        });
+        res.json({ accessToken: newAccessToken });
+      })
+      .catch((err) => {
+        res.status(500).json({ error: "Error obteniendo clave pública" });
+      });
   } catch {
     return res.status(403).json({ error: "Refresh token inválido" });
   }
