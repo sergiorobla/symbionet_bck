@@ -239,8 +239,9 @@ app.post(
       });
 
       // ✅ Aquí es la ÚNICA respuesta
-      res
-        .cookie("refreshToken", refreshToken, {
+      console.log("Enviando accessToken:", accessToken);
+      console.log("Enviando user:", user);
+      res.cookie("refreshToken", refreshToken, {
           httpOnly: true,
           secure: true,
           sameSite: "Strict",
