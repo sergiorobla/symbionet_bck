@@ -41,6 +41,7 @@ app.use(
   cors({
     origin: ["https://localhost:3000", "https://symbionet-phi.vercel.app"],
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
