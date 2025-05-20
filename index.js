@@ -238,14 +238,14 @@ app.post(
         public_key: normalizedKey,
       });
 
-      // Enviar cookie segura con refreshToken
+      // ✅ Aquí es la ÚNICA respuesta
       res
         .cookie("refreshToken", refreshToken, {
           httpOnly: true,
           secure: true,
           sameSite: "Strict",
           path: "/refresh",
-          maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
+          maxAge: 7 * 24 * 60 * 60 * 1000,
         })
         .json({
           message: "Usuario registrado",
