@@ -317,16 +317,34 @@ app.post("/post", async (req, res) => {
 // Opción de que el usuario pueda eliminar sus posts.
 app.delete("/posts/:id", async (req, res) => {
   const postId = req.params.id;
-  if (isNaN(postId)) return res.status(400).json({ error: "ID inválido" });
+  const { public_key } = req.body;
+
+  if (!public_key) {
+    return res.status(400).json({ error: "Clave pública requerida" });
+  }
+
+  const publicKeyString = normalizeJwk(public_key);
 
   try {
+    // Busca el post y verifica que el autor coincide
+    const postRes = await pool.query("SELECT * FROM posts WHERE id = $1", [
+      postId,
+    ]);
+    if (postRes.rowCount === 0) {
+      return res.status(404).json({ error: "Post no encontrado" });
+    }
+    const post = postRes.rows[0];
+    if (post.author_public_key !== publicKeyString) {
+      return res
+        .status(403)
+        .json({ error: "No autorizado para borrar este post" });
+    }
+
+    // Elimina el post
     const result = await pool.query(
       "DELETE FROM posts WHERE id = $1 RETURNING *",
       [postId]
     );
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: "Post no encontrado" });
-    }
     res.json({ message: "Post eliminado", post: result.rows[0] });
   } catch (err) {
     console.error("Error eliminando post:", err);
