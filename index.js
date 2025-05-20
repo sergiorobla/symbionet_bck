@@ -318,22 +318,24 @@ app.post("/post", async (req, res) => {
 app.delete("/posts/:id", async (req, res) => {
   const postId = req.params.id;
   const { public_key } = req.body;
-
   if (!public_key) {
     return res.status(400).json({ error: "Clave pública requerida" });
   }
 
-  const publicKeyString = normalizeJwk(public_key);
+  // Normaliza aquí:
+  const publicKeyString =
+    typeof public_key === "string" ? public_key : normalizeJwk(public_key);
 
   try {
-    // Busca el post y verifica que el autor coincide
-    const postRes = await pool.query("SELECT * FROM posts WHERE id = $1", [
+    const result = await pool.query("SELECT * FROM posts WHERE id = $1", [
       postId,
     ]);
-    if (postRes.rowCount === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: "Post no encontrado" });
     }
-    const post = postRes.rows[0];
+    const post = result.rows[0];
+
+    // Compara usando la clave normalizada
     if (post.author_public_key !== publicKeyString) {
       return res
         .status(403)
@@ -341,11 +343,11 @@ app.delete("/posts/:id", async (req, res) => {
     }
 
     // Elimina el post
-    const result = await pool.query(
+    const deleteResult = await pool.query(
       "DELETE FROM posts WHERE id = $1 RETURNING *",
       [postId]
     );
-    res.json({ message: "Post eliminado", post: result.rows[0] });
+    res.json({ message: "Post eliminado", post: deleteResult.rows[0] });
   } catch (err) {
     console.error("Error eliminando post:", err);
     res.status(500).json({ error: "Error eliminando post" });
