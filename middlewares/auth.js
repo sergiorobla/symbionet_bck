@@ -20,3 +20,15 @@ export function authMiddleware(req, res, next) {
 
   next();
 }
+
+export function checkAdminAuth(req, res, next) {
+  // ejemplo simple: auth básica
+  const auth = req.headers.authorization;
+  if (
+    !auth ||
+    auth !== `Basic ${Buffer.from("admin:adminpass").toString("base64")}`
+  ) {
+    return res.status(401).json({ error: "No autorizado" });
+  }
+  next();
+}
