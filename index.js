@@ -316,7 +316,7 @@ app.post("/post", async (req, res) => {
 
 // Opción de que el usuario pueda eliminar sus posts.
 app.delete("/posts/:id", async (req, res) => {
-  const postId = parseInt(req.params.id, 10);
+  const postId = req.params.id;
   if (isNaN(postId)) return res.status(400).json({ error: "ID inválido" });
 
   try {
