@@ -198,7 +198,7 @@ app.post(
     }
 
     try {
-      // Generar o validar nombre de usuario
+      // Validación o generación de username
       if (!username || username.trim() === "") {
         username = await generateUniqueUserNumber();
       } else {
@@ -213,35 +213,34 @@ app.post(
 
       const normalizedKey = normalizeJwk(public_key);
 
-      // Insertar usuario en base de datos
+      // Guardar en DB
       await pool.query(
         "INSERT INTO users (username, public_key) VALUES ($1, $2)",
         [username, normalizedKey]
       );
 
-      // Obtener usuario recién insertado
       const result = await pool.query(
         "SELECT * FROM users WHERE public_key = $1",
         [normalizedKey]
       );
-
       const user = result.rows[0];
 
-      // Generar tokens
+      // ✅ Generar tokens
       const accessToken = generateAccessToken({
-        username,
+        username: user.username,
         public_key: normalizedKey,
       });
-
       const refreshToken = generateRefreshToken({
-        username,
+        username: user.username,
         public_key: normalizedKey,
       });
 
-      // ✅ Aquí es la ÚNICA respuesta
-      console.log("Enviando accessToken:", accessToken);
-      console.log("Enviando user:", user);
-      res.cookie("refreshToken", refreshToken, {
+      console.log("✅ Generado accessToken:", accessToken);
+      console.log("✅ Generado refreshToken:", refreshToken);
+
+      // ✅ Enviar token + cookie
+      res
+        .cookie("refreshToken", refreshToken, {
           httpOnly: true,
           secure: true,
           sameSite: "Strict",
@@ -251,10 +250,10 @@ app.post(
         .json({
           message: "Usuario registrado",
           user,
-          accessToken,
+          accessToken, // <- aquí es donde el frontend lo espera
         });
     } catch (err) {
-      console.error("Error en registro:", err);
+      console.error("❌ Error en /register:", err);
       res.status(500).json({ error: "Error interno del servidor" });
     }
   }
