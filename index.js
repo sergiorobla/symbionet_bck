@@ -20,6 +20,7 @@ dotenv.config();
 const app = express();
 const { Pool } = pg;
 const httpServer = createServer(app);
+const JWT_SECRET = process.env.JWT_SECRET || "mi_clave_secreta_super_segura";
 
 // Seguridad
 app.use(helmet());
@@ -175,19 +176,25 @@ app.post(
   ],
   async (req, res) => {
     const errors = validationResult(req);
-    if (!errors.isEmpty())
+    if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
+    }
 
     let { username, public_key, captchaQuestion, captchaAnswer } = req.body;
+
     const match = captchaQuestion.match(/¿Cuánto es (\d+) ([+-]) (\d+)\?/);
-    if (!match) return res.status(400).json({ error: "CAPTCHA inválido" });
+    if (!match) {
+      return res.status(400).json({ error: "CAPTCHA inválido" });
+    }
 
     const expected =
       match[2] === "+" ? +match[1] + +match[3] : +match[1] - +match[3];
-    if (+captchaAnswer !== expected)
+    if (+captchaAnswer !== expected) {
       return res.status(400).json({ error: "Respuesta CAPTCHA incorrecta" });
+    }
 
     try {
+      // Generar o validar nombre de usuario
       if (!username || username.trim() === "") {
         username = await generateUniqueUserNumber();
       } else {
@@ -195,39 +202,50 @@ app.post(
           "SELECT 1 FROM users WHERE username = $1",
           [username]
         );
-        if (exists.rowCount > 0) username = await generateUniqueUserNumber();
+        if (exists.rowCount > 0) {
+          username = await generateUniqueUserNumber();
+        }
       }
 
       const normalizedKey = normalizeJwk(public_key);
+
+      // Insertar usuario en base de datos
       await pool.query(
         "INSERT INTO users (username, public_key) VALUES ($1, $2)",
         [username, normalizedKey]
       );
 
+      // Obtener usuario recién insertado
       const result = await pool.query(
         "SELECT * FROM users WHERE public_key = $1",
         [normalizedKey]
       );
+
+      const user = result.rows[0];
+
+      // Generar tokens
       const accessToken = generateAccessToken({
         username,
         public_key: normalizedKey,
       });
+
       const refreshToken = generateRefreshToken({
         username,
         public_key: normalizedKey,
       });
 
+      // Enviar cookie segura con refreshToken
       res
         .cookie("refreshToken", refreshToken, {
           httpOnly: true,
           secure: true,
           sameSite: "Strict",
           path: "/refresh",
-          maxAge: 7 * 24 * 60 * 60 * 1000,
+          maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
         })
         .json({
           message: "Usuario registrado",
-          user: result.rows[0],
+          user,
           accessToken,
         });
     } catch (err) {

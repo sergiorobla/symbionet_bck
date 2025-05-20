@@ -1,34 +1,43 @@
-export function authMiddleware(req, res, next) {
+// auth.js (backend)
+
+import jwt from "jsonwebtoken";
+
+const JWT_SECRET = process.env.JWT_SECRET || "mi_clave_secreta_super_segura";
+
+/**
+ * Middleware para rutas protegidas con JWT.
+ */
+export function jwtAuthMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith("Basic ")) {
-    return res
-      .status(401)
-      .json({ error: "No autorizado: falta autenticación" });
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Token requerido" });
   }
 
-  const base64Credentials = authHeader.split(" ")[1];
-  const credentials = Buffer.from(base64Credentials, "base64").toString(
-    "ascii"
-  );
-  const [username, password] = credentials.split(":");
+  const token = authHeader.split(" ")[1];
 
-  // Cambia aquí si quieres otro usuario o contraseña
-  if (username !== "admin" || password !== "admin") {
-    return res.status(403).json({ error: "Credenciales inválidas" });
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch (err) {
+    console.error("JWT inválido:", err.message);
+    return res.status(403).json({ error: "Token inválido" });
   }
-
-  next();
 }
 
+/**
+ * Middleware de autenticación básica para admin.
+ */
 export function checkAdminAuth(req, res, next) {
-  // ejemplo simple: auth básica
+  const expectedAuth = `Basic ${Buffer.from("admin:adminpass").toString(
+    "base64"
+  )}`;
   const auth = req.headers.authorization;
-  if (
-    !auth ||
-    auth !== `Basic ${Buffer.from("admin:adminpass").toString("base64")}`
-  ) {
+
+  if (auth !== expectedAuth) {
     return res.status(401).json({ error: "No autorizado" });
   }
+
   next();
 }
