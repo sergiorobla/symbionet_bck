@@ -142,21 +142,17 @@ function verifyToken(req, res, next) {
     if (req.body?.public_key) {
       const bodyKey = normalizeJwk(req.body.public_key);
       if (bodyKey !== decoded.public_key) {
-        return res
-          .status(403)
-          .json({
-            error: "No autorizado: clave pública no coincide con el token",
-          });
+        return res.status(403).json({
+          error: "No autorizado: clave pública no coincide con el token",
+        });
       }
     }
     if (req.body?.publicKey) {
       const bodyKey = normalizeJwk(req.body.publicKey);
       if (bodyKey !== decoded.public_key) {
-        return res
-          .status(403)
-          .json({
-            error: "No autorizado: clave pública no coincide con el token",
-          });
+        return res.status(403).json({
+          error: "No autorizado: clave pública no coincide con el token",
+        });
       }
     }
     next();
@@ -395,7 +391,7 @@ app.get("/users", verifyToken, async (req, res) => {
 });
 
 // Obtener todos los posts para home
-app.get("/postshome", verifyToken, async (req, res) => {
+app.get("/postshome", async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT posts.*, users.username
