@@ -539,6 +539,27 @@ app.delete("/admin/posts/:id", checkAdminAuth, async (req, res) => {
   }
 });
 
+// Login usuario
+app.post("/login", async (req, res) => {
+  const { public_key } = req.body;
+  const user = await findUserByPublicKey(public_key);
+
+  if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+
+  res.cookie("refreshToken", refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "None",
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
+  });
+
+  res.json({ user, accessToken });
+});
+
+
 const PORT = process.env.PORT || 4000;
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor escuchando en el puerto ${PORT}`);
