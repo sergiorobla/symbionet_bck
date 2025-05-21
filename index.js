@@ -91,6 +91,14 @@ function normalizeJwk(jwk) {
   return JSON.stringify(ordered);
 }
 
+async function findUserByPublicKey(jwk) {
+  const normalized = normalizeJwk(jwk);
+  const result = await pool.query("SELECT * FROM users WHERE public_key = $1", [
+    normalized,
+  ]);
+  return result.rows[0];
+}
+
 function generate4DigitNumber() {
   return Math.floor(Math.random() * 10000)
     .toString()
@@ -540,24 +548,28 @@ app.delete("/admin/posts/:id", checkAdminAuth, async (req, res) => {
 
 // Login usuario
 app.post("/login", async (req, res) => {
-  const { public_key } = req.body;
-  const user = await findUserByPublicKey(public_key);
+  try {
+    const { public_key } = req.body;
+    const user = await findUserByPublicKey(public_key);
 
-  if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
 
-  const accessToken = generateAccessToken(user);
-  const refreshToken = generateRefreshToken(user);
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
 
-  res.cookie("refreshToken", refreshToken, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "None",
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
-  });
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
 
-  res.json({ user, accessToken });
+    res.json({ user, accessToken });
+  } catch (err) {
+    console.error("Error en /login:", err);
+    res.status(500).json({ error: "Error interno en login" });
+  }
 });
-
 
 const PORT = process.env.PORT || 4000;
 httpServer.listen(PORT, "0.0.0.0", () => {
