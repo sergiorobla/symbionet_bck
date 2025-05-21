@@ -30,14 +30,24 @@ export function jwtAuthMiddleware(req, res, next) {
  * Middleware de autenticación básica para admin.
  */
 export function checkAdminAuth(req, res, next) {
-  const expectedAuth = `Basic ${Buffer.from("admin:adminpass").toString(
-    "base64"
-  )}`;
-  const auth = req.headers.authorization;
+  if (req.method === "OPTIONS") return next(); // Permite preflight
 
-  if (auth !== expectedAuth) {
-    return res.status(401).json({ error: "No autorizado" });
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "No autorizado: token requerido" });
   }
 
-  next();
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.username !== "admin") {
+      return res
+        .status(403)
+        .json({ error: "No tienes permisos de administrador" });
+    }
+    req.user = decoded;
+    next();
+  } catch {
+    return res.status(403).json({ error: "Token inválido" });
+  }
 }

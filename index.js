@@ -45,6 +45,8 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+// Permite que todas las rutas respondan a las solicitudes preflight
+app.options("*", cors());
 
 // Socket.IO
 const io = new Server(httpServer, {
