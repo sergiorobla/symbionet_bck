@@ -21,6 +21,7 @@ import {
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", 1);
 const { Pool } = pg;
 const httpServer = createServer(app);
 const JWT_SECRET = process.env.JWT_SECRET || "mi_clave_secreta_super_segura";
