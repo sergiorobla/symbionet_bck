@@ -40,7 +40,7 @@ app.use(limiter);
 // CORS seguro
 app.use(
   cors({
-    origin: ["https://localhost:3000", "https://symbionet-three.vercel.app"],
+    origin: ["https://localhost:3000", "https://symbionet-three.vercel.app", "https://www.thefacebook.blog"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"],
   })
