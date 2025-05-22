@@ -40,7 +40,7 @@ app.use(limiter);
 // CORS seguro
 app.use(
   cors({
-    origin: ["https://localhost:3000", "https://symbi-brown.vercel.app"],
+    origin: ["https://localhost:3000", "https://symbionet-three.vercel.app/"],
     credentials: true,
     allowedHeaders: ["Content-Type", "Authorization"],
   })
@@ -51,7 +51,7 @@ app.options("*", cors());
 // Socket.IO
 const io = new Server(httpServer, {
   cors: {
-    origin: ["https://localhost:3000", "https://symbi-brown.vercel.app"],
+    origin: ["https://localhost:3000", "https://symbionet-three.vercel.app/"],
     credentials: true,
   },
 });
