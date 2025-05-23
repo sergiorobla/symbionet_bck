@@ -2,358 +2,358 @@ import express from "express";
 import pg from "pg";
 import cors from "cors";
 import dotenv from "dotenv";
-import jwkToPem from "jwk-to-pem";
-import crypto from "crypto";
-import { jwtAuthMiddleware } from "./middlewares/auth.js";
-import { createServer } from "https";
-import fs from "fs";
-import path from "path";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
+import { body, validationResult } from "express-validator";
 import { Server } from "socket.io";
+import { createServer } from "http";
+import jwt from "jsonwebtoken";
+import crypto from "crypto";
+import cookieParser from "cookie-parser";
+import jwkToPem from "jwk-to-pem";
+import { checkAdminAuth } from "./middlewares/auth.js";
 
 dotenv.config();
 
 const app = express();
-const httpsOptions = {
-  key: fs.readFileSync(path.join("certs", "localhost-key.pem")),
-  cert: fs.readFileSync(path.join("certs", "localhost.pem")),
-};
+app.set("trust proxy", 1);
+const { Pool } = pg;
+const httpServer = createServer(app);
+const JWT_SECRET = process.env.JWT_SECRET;
 
-const httpServer = createServer(httpsOptions, app);
+// Seguridad
+app.use(helmet());
+app.use(cookieParser());
 
+// Rate limiting global
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+});
+app.use(limiter);
+
+// CORS seguro
+app.use(
+  cors({
+    origin: [
+      "https://localhost:3000",
+      "https://symbionet-three.vercel.app",
+      "https://www.thefacebook.blog",
+    ],
+    credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+// Permite que todas las rutas respondan a las solicitudes preflight
+app.options("*", cors());
+
+// Socket.IO
 const io = new Server(httpServer, {
   cors: {
-    origin: "https://localhost:3000",
+    origin: ["https://localhost:3000", "https://symbionet-three.vercel.app"],
+    credentials: true,
   },
 });
 
-// Map para guardar userId y socketId
-const connectedUsers = new Map();
+app.use(express.json());
 
-io.on("connection", (socket) => {
-  console.log("Cliente conectado:", socket.id);
-
-  socket.on("registerUser", (userId) => {
-    connectedUsers.set(userId, socket.id);
-    console.log(`Registrado usuario ${userId} con socket ${socket.id}`);
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Cliente desconectado:", socket.id);
-    for (const [userId, socketId] of connectedUsers.entries()) {
-      if (socketId === socket.id) {
-        connectedUsers.delete(userId);
-        break;
-      }
-    }
-  });
-});
-
-const pool = new pg.Pool({
+const pool = new Pool({
   host: process.env.PGHOST,
   user: process.env.PGUSER,
   password: process.env.PGPASSWORD,
   database: process.env.PGDATABASE,
   port: process.env.PGPORT,
+  ssl: { rejectUnauthorized: false },
 });
 
-app.use(express.json());
-app.use(cors());
+const connectedUsers = new Map();
 
-app.get("/", (req, res) => {
-  res.send("SymbioNet backend is running");
-});
+socket.emit("registerUser", user.id);
 
-// PARTE DE NORMALIZACIONES EN ENCRIPTACIONES -------------------------------------------------------------------------------------
-
-// Función para garantizar la normalización del JWK
+// Utils
 function normalizeJwk(jwk) {
   const ordered = {};
   Object.keys(jwk)
     .sort()
-    .forEach((key) => {
-      ordered[key] = jwk[key];
-    });
+    .forEach((k) => (ordered[k] = jwk[k]));
   return JSON.stringify(ordered);
 }
 
-// PARTE DEL REGISTRO DEL USUARIO -------------------------------------------------------------------------------------------------
-
-// Registrar usuario con clave pública
-// Genera los 4 números para el user
-function generate4DigitNumber() {
-  const num = Math.floor(Math.random() * 10000);
-  return num.toString().padStart(4, "0");
+async function findUserByPublicKey(jwk) {
+  const normalized = normalizeJwk(jwk);
+  const result = await pool.query("SELECT * FROM users WHERE public_key = $1", [
+    normalized,
+  ]);
+  return result.rows[0];
 }
 
-// Genera un user-XXXX único
+function generate4DigitNumber() {
+  return Math.floor(Math.random() * 10000)
+    .toString()
+    .padStart(4, "0");
+}
+
 async function generateUniqueUserNumber() {
-  const usedNumbersRes = await pool.query(
+  const res = await pool.query(
     "SELECT SUBSTRING(username FROM 6 FOR 4) AS num FROM users WHERE username LIKE 'user-%'"
   );
-
-  const usedNumbers = new Set(usedNumbersRes.rows.map((r) => r.num));
-
+  const used = new Set(res.rows.map((r) => r.num));
   let tries = 0;
   while (tries < 10000) {
     const candidate = generate4DigitNumber();
-    if (!usedNumbers.has(candidate)) return `user-${candidate}`;
+    if (!used.has(candidate)) return `user-${candidate}`;
     tries++;
   }
-  throw new Error("No hay números disponibles para user-XXXX");
+  throw new Error("No hay números disponibles");
 }
 
-// Registrar usuario con clave pública
-app.post("/register", async (req, res) => {
-  let { username, public_key, captchaQuestion, captchaAnswer } = req.body;
-
-  // 1. Validación del CAPTCHA
-  if (
-    typeof captchaQuestion !== "string" ||
-    typeof captchaAnswer === "undefined"
-  ) {
-    return res.status(400).json({ error: "CAPTCHA inválido" });
-  }
-
-  // Extrae los números y el operador de la pregunta del tipo "¿Cuánto es X + Y?" o "¿Cuánto es X - Y?"
-  const match = captchaQuestion.match(/¿Cuánto es (\d+) ([+-]) (\d+)\?/);
-  if (!match) {
-    return res.status(400).json({ error: "Formato de pregunta inválido" });
-  }
-  const num1 = parseInt(match[1], 10);
-  const operator = match[2];
-  const num2 = parseInt(match[3], 10);
-
-  let expectedAnswer;
-  if (operator === "+") expectedAnswer = num1 + num2;
-  else expectedAnswer = num1 - num2;
-
-  if (parseInt(captchaAnswer, 10) !== expectedAnswer) {
-    return res.status(400).json({ error: "Respuesta incorrecta al CAPTCHA" });
-  }
-
-  if (username && typeof username !== "string") {
-    return res.status(400).json({ error: "Username inválido" });
-  }
-
-  if (username) {
-    username = username.trim();
-    if (username === "") username = null;
-  }
-
-  let finalUsername = username;
-
-  if (!finalUsername) {
-    try {
-      finalUsername = await generateUniqueUserNumber();
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
-  } else {
-    console.log("Verificando existencia de usuario:", finalUsername);
-
-    const exists = await pool.query("SELECT 1 FROM users WHERE username = $1", [
-      finalUsername,
-    ]);
-
-    console.log("¿Existe usuario?", exists.rowCount > 0);
-
-    if (exists.rowCount > 0) {
-      console.log(
-        `El username ${finalUsername} ya existe. Generando uno nuevo...`
-      );
-      try {
-        finalUsername = await generateUniqueUserNumber();
-      } catch (e) {
-        return res.status(500).json({ error: e.message });
-      }
-    }
-  }
-
-  try {
-    // 🔧 Normalizamos la clave pública
-    const normalizedPublicKey = normalizeJwk(public_key);
-
-    // Guardamos usando la clave pública normalizada
-    await pool.query(
-      "INSERT INTO users (username, public_key) VALUES ($1, $2)",
-      [finalUsername, normalizedPublicKey]
-    );
-
-    // Consultamos usando también la clave pública normalizada
-    const result = await pool.query(
-      "SELECT * FROM users WHERE public_key = $1",
-      [normalizedPublicKey]
-    );
-
-    res.json({ message: "Usuario registrado", user: result.rows[0] });
-  } catch (err) {
-    console.error("Error registrando usuario:", err);
-    res.status(500).json({ error: "Error registrando usuario" });
-  }
-});
-
-// PARTE DE VERIFICACIONES PARA ENDPOINTS O FUNCIONES -----------------------------------------------------------------------------
-
-// Función clave para verificar ECDSA con P-256
 async function verifySignature(message, signatureBase64, publicKeyJwk) {
   try {
     const publicKeyPem = jwkToPem(publicKeyJwk);
-
-    console.log("Mensaje para verificar:", message);
-    console.log("Clave pública PEM:", publicKeyPem);
     const verify = crypto.createVerify("SHA256");
     verify.update(message);
     verify.end();
-
     const signature = Buffer.from(signatureBase64, "base64");
-    console.log("Firma buffer hex:", signature.toString("hex"));
-
-    const isValid = verify.verify(publicKeyPem, signature);
-    console.log("Firma válida:", isValid);
-    return isValid;
+    return verify.verify(publicKeyPem, signature);
   } catch (e) {
     console.error("Error verificando firma:", e);
     return false;
   }
 }
 
-// Middleware simple de autenticación básica para admin
-function checkAdminAuth(req, res, next) {
+function generateAccessToken(payload) {
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: "15m" });
+}
+
+function generateRefreshToken(payload) {
+  return jwt.sign(payload, process.env.REFRESH_SECRET, { expiresIn: "7d" });
+}
+
+function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith("Basic ")) {
-    return res.status(401).json({ error: "No autorizado" });
+  if (!authHeader?.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Token requerido" });
   }
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
 
-  const base64Credentials = authHeader.split(" ")[1];
-  const credentials = Buffer.from(base64Credentials, "base64").toString(
-    "ascii"
-  );
-  const [username, password] = credentials.split(":");
-
-  if (username === "admin" && password === "admin") {
+    // Si la ruta recibe public_key o publicKey en el body, compárala con la del token
+    if (req.body?.public_key) {
+      const bodyKey = normalizeJwk(req.body.public_key);
+      if (bodyKey !== decoded.public_key) {
+        return res.status(403).json({
+          error: "No autorizado: clave pública no coincide con el token",
+        });
+      }
+    }
+    if (req.body?.publicKey) {
+      const bodyKey = normalizeJwk(req.body.publicKey);
+      if (bodyKey !== decoded.public_key) {
+        return res.status(403).json({
+          error: "No autorizado: clave pública no coincide con el token",
+        });
+      }
+    }
     next();
-  } else {
-    return res.status(403).json({ error: "Credenciales inválidas" });
+  } catch {
+    return res.status(401).json({ error: "Token inválido" });
   }
 }
 
-// PARTE DE GESTIÓN POR PARTE DEL USUARIO DE SU PERFIL ----------------------------------------------------------------------------
+// ------------------ RUTAS ------------------
+app.get("/", (req, res) => {
+  res.send("SymbioNet backend con refresh token funcionando.");
+});
 
-// Opción de que el usuario pueda cambiar su nombre.
-app.put("/username", async (req, res) => {
-  const body = req.body || {}; // fallback seguro
-  const { newUsername, public_key } = body;
+app.post(
+  "/register",
+  [
+    body("public_key").notEmpty(),
+    body("captchaQuestion").isString(),
+    body("captchaAnswer").isNumeric(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
 
-  if (!newUsername || !public_key) {
-    return res.status(400).json({ error: "Faltan parámetros" });
+    let { username, public_key, captchaQuestion, captchaAnswer } = req.body;
+
+    const match = captchaQuestion.match(/¿Cuánto es (\d+) ([+-]) (\d+)\?/);
+    if (!match) {
+      return res.status(400).json({ error: "CAPTCHA inválido" });
+    }
+
+    const expected =
+      match[2] === "+" ? +match[1] + +match[3] : +match[1] - +match[3];
+    if (+captchaAnswer !== expected) {
+      return res.status(400).json({ error: "Respuesta CAPTCHA incorrecta" });
+    }
+
+    try {
+      // Validación o generación de username
+      if (!username || username.trim() === "") {
+        username = await generateUniqueUserNumber();
+      } else {
+        const exists = await pool.query(
+          "SELECT 1 FROM users WHERE username = $1",
+          [username]
+        );
+        if (exists.rowCount > 0) {
+          username = await generateUniqueUserNumber();
+        }
+      }
+
+      const normalizedKey = normalizeJwk(public_key);
+
+      // Guardar en DB
+      await pool.query(
+        "INSERT INTO users (username, public_key) VALUES ($1, $2)",
+        [username, normalizedKey]
+      );
+
+      const result = await pool.query(
+        "SELECT * FROM users WHERE public_key = $1",
+        [normalizedKey]
+      );
+      const user = result.rows[0];
+
+      // ✅ Generar tokens
+      const accessToken = generateAccessToken({
+        username: user.username,
+        public_key: normalizedKey,
+      });
+      const refreshToken = generateRefreshToken({
+        username: user.username,
+        public_key: normalizedKey,
+      });
+
+      console.log("✅ Generado accessToken:", accessToken);
+      console.log("✅ Generado refreshToken:", refreshToken);
+
+      // ✅ Enviar token + cookie
+      res
+        .cookie("refreshToken", refreshToken, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "None",
+          path: "/refresh",
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+        })
+        .json({
+          message: "Usuario registrado",
+          user,
+          accessToken, // <- aquí es donde el frontend lo espera
+        });
+    } catch (err) {
+      console.error("❌ Error en /register:", err);
+      res.status(500).json({ error: "Error interno del servidor" });
+    }
   }
+);
 
-  const trimmedUsername = newUsername.trim();
-
-  if (trimmedUsername === "") {
-    return res
-      .status(400)
-      .json({ error: "El nuevo nombre no puede estar vacío" });
-  }
+app.post("/refresh", (req, res) => {
+  const token = req.cookies?.refreshToken;
+  if (!token)
+    return res.status(401).json({ error: "Token de actualización requerido" });
 
   try {
-    const existing = await pool.query(
-      "SELECT 1 FROM users WHERE username = $1",
-      [trimmedUsername]
-    );
-    if (existing.rowCount > 0) {
-      return res.status(409).json({ error: "El nombre ya está en uso" });
-    }
-
-    const publicKeyString = normalizeJwk(public_key);
-
-    const result = await pool.query(
-      "UPDATE users SET username = $1 WHERE public_key = $2 RETURNING *",
-      [trimmedUsername, publicKeyString]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-
-    res.json({ message: "Nombre actualizado", user: result.rows[0] });
-  } catch (err) {
-    console.error("Error cambiando username:", err);
-    res.status(500).json({ error: "Error cambiando el nombre" });
+    const payload = jwt.verify(token, process.env.REFRESH_SECRET);
+    // Busca la clave pública del usuario en la base de datos
+    pool
+      .query("SELECT public_key FROM users WHERE username = $1", [
+        payload.username,
+      ])
+      .then((userRes) => {
+        const userPublicKey = userRes.rows[0]?.public_key;
+        const newAccessToken = generateAccessToken({
+          username: payload.username,
+          public_key: userPublicKey,
+        });
+        res.json({ accessToken: newAccessToken });
+      })
+      .catch((err) => {
+        res.status(500).json({ error: "Error obteniendo clave pública" });
+      });
+  } catch {
+    return res.status(403).json({ error: "Refresh token inválido" });
   }
 });
 
-// Opción de que el usuario puede publicar un post.
-app.post("/post", async (req, res) => {
-  const { message, signature, publicKey } = req.body;
-  console.log("Recibido en /post:", { message, signature, publicKey });
+// Publicar post (requiere token y firma válida)
+app.post(
+  "/post",
+  verifyToken,
+  [
+    body("message").isString().notEmpty(),
+    body("signature").isString(),
+    body("publicKey").notEmpty(),
+  ],
+  async (req, res) => {
+    const { message, signature, publicKey } = req.body;
 
-  if (!message || !signature || !publicKey) {
-    return res.status(400).json({ error: "Faltan parámetros" });
+    try {
+      const valid = await verifySignature(message, signature, publicKey);
+      if (!valid) return res.status(401).json({ error: "Firma inválida" });
+
+      const publicKeyString = normalizeJwk(publicKey);
+      const result = await pool.query(
+        `INSERT INTO posts (content, author_public_key, created_at)
+       VALUES ($1, $2, NOW()) RETURNING *`,
+        [message, publicKeyString]
+      );
+
+      res.json({ post: result.rows[0] });
+    } catch (err) {
+      console.error("Error en /post:", err);
+      res.status(500).json({ error: "Error interno" });
+    }
   }
+);
 
+// Eliminar post (requiere token)
+app.delete("/posts/:id", verifyToken, async (req, res) => {
+  const { id } = req.params;
+  const { public_key } = req.body;
+
+  if (!public_key)
+    return res.status(400).json({ error: "Clave pública requerida" });
+
+  const publicKeyString =
+    typeof public_key === "string" ? public_key : normalizeJwk(public_key);
   try {
-    const valid = await verifySignature(message, signature, publicKey);
-    console.log("Firma válida:", valid);
-    if (!valid) return res.status(401).json({ error: "Firma inválida" });
-
-    const publicKeyString = normalizeJwk(publicKey);
-
-    const result = await pool.query(
-      `INSERT INTO posts (content, author_public_key, created_at)
-   VALUES ($1, $2, NOW()) RETURNING *`,
-      [message, publicKeyString]
-    );
-
-    res.json({ post: result.rows[0] });
-  } catch (error) {
-    console.error("Error en /post:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
-  }
-});
-
-// Opción de que el usuario pueda eliminar sus posts.
-app.delete("/posts/:id", async (req, res) => {
-  const postId = parseInt(req.params.id, 10);
-  if (isNaN(postId)) return res.status(400).json({ error: "ID inválido" });
-
-  try {
-    const result = await pool.query(
-      "DELETE FROM posts WHERE id = $1 RETURNING *",
-      [postId]
-    );
-    if (result.rowCount === 0) {
+    const postRes = await pool.query("SELECT * FROM posts WHERE id = $1", [id]);
+    if (postRes.rowCount === 0)
       return res.status(404).json({ error: "Post no encontrado" });
-    }
-    res.json({ message: "Post eliminado", post: result.rows[0] });
+
+    if (postRes.rows[0].author_public_key !== publicKeyString)
+      return res.status(403).json({ error: "No autorizado" });
+
+    await pool.query("DELETE FROM posts WHERE id = $1", [id]);
+    res.json({ message: "Post eliminado" });
   } catch (err) {
     console.error("Error eliminando post:", err);
     res.status(500).json({ error: "Error eliminando post" });
   }
 });
 
-// PARTE DE OBTENCIÓN DE DATOS ----------------------------------------------------------------------------------------------------
-
-// Obtener datos del usuario con clave pública.
-app.post("/me", async (req, res) => {
+// Obtener datos del perfil del usuario autenticado
+app.post("/me", verifyToken, async (req, res) => {
   const { public_key } = req.body;
-
-  if (!public_key) {
+  if (!public_key)
     return res.status(400).json({ error: "Clave pública requerida" });
-  }
 
   try {
     const publicKeyString = normalizeJwk(public_key);
-
     const result = await pool.query(
       "SELECT * FROM users WHERE public_key = $1",
       [publicKeyString]
     );
-
-    if (result.rows.length === 0) {
+    if (result.rowCount === 0)
       return res.status(404).json({ error: "Usuario no encontrado" });
-    }
 
     res.json({ user: result.rows[0] });
   } catch (err) {
@@ -362,8 +362,41 @@ app.post("/me", async (req, res) => {
   }
 });
 
-// Obtener los usuarios para visualización pública.
-app.get("/users", async (req, res) => {
+// Cambiar nombre de usuario
+app.put(
+  "/username",
+  verifyToken,
+  [body("newUsername").isString().notEmpty(), body("public_key").notEmpty()],
+  async (req, res) => {
+    const { newUsername, public_key } = req.body;
+
+    try {
+      const existing = await pool.query(
+        "SELECT 1 FROM users WHERE username = $1",
+        [newUsername.trim()]
+      );
+      if (existing.rowCount > 0)
+        return res.status(409).json({ error: "El nombre ya está en uso" });
+
+      const publicKeyString = normalizeJwk(public_key);
+      const result = await pool.query(
+        "UPDATE users SET username = $1 WHERE public_key = $2 RETURNING *",
+        [newUsername.trim(), publicKeyString]
+      );
+
+      if (result.rowCount === 0)
+        return res.status(404).json({ error: "Usuario no encontrado" });
+
+      res.json({ message: "Nombre actualizado", user: result.rows[0] });
+    } catch (err) {
+      console.error("Error actualizando nombre:", err);
+      res.status(500).json({ error: "Error actualizando nombre" });
+    }
+  }
+);
+
+// Obtener todos los usuarios públicos
+app.get("/users", verifyToken, async (req, res) => {
   try {
     const { rows } = await pool.query(
       "SELECT id, username, reputation FROM users"
@@ -375,82 +408,77 @@ app.get("/users", async (req, res) => {
   }
 });
 
-// Obtener todos los posts (para Home).
+// Obtener todos los posts para home
 app.get("/postshome", async (req, res) => {
   try {
     const result = await pool.query(`
-  SELECT posts.*, users.username
-  FROM posts
-  JOIN users ON posts.author_public_key = users.public_key
-  ORDER BY posts.created_at DESC
-`);
+      SELECT posts.*, users.username
+      FROM posts
+      JOIN users ON posts.author_public_key = users.public_key
+      ORDER BY posts.created_at DESC
+    `);
     res.json({ posts: result.rows });
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error("Error en /postshome:", err);
     res.status(500).json({ error: "Error obteniendo posts" });
   }
 });
 
-// Obtener posts de un usuario (para Profile).
-app.post("/postsuser", async (req, res) => {
-  console.log("BODY RECIBIDO EN /postsuser:", req.body);
-  const { public_key } = req.body;
-  if (!public_key)
-    return res.status(400).json({ error: "Clave pública requerida" });
-
-  try {
-    const publicKeyString = normalizeJwk(public_key);
-
-    const result = await pool.query(
-      "SELECT * FROM posts WHERE author_public_key = $1 ORDER BY created_at DESC",
-      [publicKeyString]
-    );
-
-    res.json({ posts: result.rows });
-  } catch (err) {
-    console.error("Error en POST /posts:", err);
-    res.status(500).json({ error: "Error al obtener posts del usuario" });
+// Obtener posts de un usuario
+app.post(
+  "/postsuser",
+  verifyToken,
+  [body("public_key").notEmpty()],
+  async (req, res) => {
+    const { public_key } = req.body;
+    try {
+      const publicKeyString = normalizeJwk(public_key);
+      const result = await pool.query(
+        "SELECT * FROM posts WHERE author_public_key = $1 ORDER BY created_at DESC",
+        [publicKeyString]
+      );
+      res.json({ posts: result.rows });
+    } catch (err) {
+      console.error("Error en /postsuser:", err);
+      res.status(500).json({ error: "Error al obtener posts" });
+    }
   }
-});
+);
 
-// Obtener usuarios por id
-app.get("/user/:id", async (req, res) => {
+// Obtener usuario por ID
+app.get("/user/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
       "SELECT id, username, public_key FROM users WHERE id = $1",
       [id]
     );
-    if (result.rows.length === 0) {
+    if (result.rows.length === 0)
       return res.status(404).json({ error: "Usuario no encontrado" });
-    }
+
     res.json(result.rows[0]);
   } catch (err) {
-    console.error("Error al obtener usuario:", err);
+    console.error("Error en /user/:id:", err);
     res.status(500).json({ error: "Error al obtener usuario" });
   }
 });
 
-// PARTE DEL /admin PARA ADMINISTRAR LA PAGINA ------------------------------------------------------------------------------------
-
-// Ruta protegida que devuelve todos los usuarios y posts
+// RUTA ADMIN: obtener usuarios y posts
 app.get("/admin/data", checkAdminAuth, async (req, res) => {
   try {
     const usersPromise = pool.query(
       "SELECT id, username, reputation FROM users"
     );
     const postsPromise = pool.query(`
-  SELECT posts.*, users.username
-  FROM posts
-  JOIN users ON posts.author_public_key = users.public_key
-  ORDER BY posts.created_at DESC
-`);
-
+      SELECT posts.*, users.username
+      FROM posts
+      JOIN users ON posts.author_public_key = users.public_key
+      ORDER BY posts.created_at DESC
+    `);
     const [usersRes, postsRes] = await Promise.all([
       usersPromise,
       postsPromise,
     ]);
-
     res.json({
       users: usersRes.rows,
       posts: postsRes.rows,
@@ -461,58 +489,76 @@ app.get("/admin/data", checkAdminAuth, async (req, res) => {
   }
 });
 
-// Eliminar usuario (admin)
-app.delete("/admin/users/:id", jwtAuthMiddleware, async (req, res) => {
+// RUTA ADMIN: eliminar usuario
+app.delete("/admin/users/:id", checkAdminAuth, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
       "DELETE FROM users WHERE id = $1 RETURNING *",
       [id]
     );
-
-    if (result.rowCount === 0) {
+    if (result.rowCount === 0)
       return res.status(404).json({ error: "Usuario no encontrado" });
-    }
 
     const deletedUser = result.rows[0];
 
-    // Emitimos a TODOS que ese usuario fue eliminado (para que lo manejen en frontend)
     io.emit("userDeleted", deletedUser.id);
-
-    // Si queremos desconectar o limpiar algo del socket, lo hacemos aquí
     const socketId = connectedUsers.get(deletedUser.id);
     if (socketId) {
       connectedUsers.delete(deletedUser.id);
-      // Desconecta el socket del usuario eliminado
       io.sockets.sockets.get(socketId)?.disconnect();
     }
 
     res.json({ success: true, deletedUser });
-  } catch (error) {
-    console.error("Error eliminando usuario:", error);
+  } catch (err) {
+    console.error("Error eliminando usuario:", err);
     res.status(500).json({ error: "Error eliminando usuario" });
   }
 });
 
-// Eliminar posts (admin)
-app.delete("/admin/posts/:id", jwtAuthMiddleware, async (req, res) => {
+// RUTA ADMIN: eliminar post
+app.delete("/admin/posts/:id", checkAdminAuth, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
       "DELETE FROM posts WHERE id = $1 RETURNING *",
       [id]
     );
-    if (result.rowCount === 0) {
+    if (result.rowCount === 0)
       return res.status(404).json({ error: "Post no encontrado" });
-    }
+
     res.json({ success: true, deletedPost: result.rows[0] });
-  } catch (error) {
-    console.error("Error eliminando post:", error);
+  } catch (err) {
+    console.error("Error eliminando post:", err);
     res.status(500).json({ error: "Error eliminando post" });
   }
 });
 
-// SALIDA DEL BACK HACIA EL PUERTO ------------------------------------------------------------------------------------------------
+// Login usuario
+app.post("/login", async (req, res) => {
+  try {
+    const { public_key } = req.body;
+    const user = await findUserByPublicKey(public_key);
+
+    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+
+    const accessToken = generateAccessToken(user);
+    const refreshToken = generateRefreshToken(user);
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.json({ user, accessToken });
+  } catch (err) {
+    console.error("Error en /login:", err);
+    res.status(500).json({ error: "Error interno en login" });
+  }
+});
+
 const PORT = process.env.PORT || 4000;
 httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor escuchando en el puerto ${PORT}`);
