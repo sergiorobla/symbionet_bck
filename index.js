@@ -68,8 +68,6 @@ const pool = new Pool({
 
 const connectedUsers = new Map();
 
-socket.emit("registerUser", user.id);
-
 // Utils
 function normalizeJwk(jwk) {
   const ordered = {};
