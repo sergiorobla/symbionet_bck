@@ -4,7 +4,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import jwkToPem from "jwk-to-pem";
 import crypto from "crypto";
-import { authMiddleware } from "./middlewares/auth.js";
+import { jwtAuthMiddleware } from "./middlewares/auth.js";
 import { createServer } from "https";
 import fs from "fs";
 import path from "path";
@@ -462,7 +462,7 @@ app.get("/admin/data", checkAdminAuth, async (req, res) => {
 });
 
 // Eliminar usuario (admin)
-app.delete("/admin/users/:id", authMiddleware, async (req, res) => {
+app.delete("/admin/users/:id", jwtAuthMiddleware, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
@@ -495,7 +495,7 @@ app.delete("/admin/users/:id", authMiddleware, async (req, res) => {
 });
 
 // Eliminar posts (admin)
-app.delete("/admin/posts/:id", authMiddleware, async (req, res) => {
+app.delete("/admin/posts/:id", jwtAuthMiddleware, async (req, res) => {
   const { id } = req.params;
   try {
     const result = await pool.query(
