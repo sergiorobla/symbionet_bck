@@ -312,6 +312,81 @@ app.post(
   }
 );
 
+// Crear comentario
+app.post(
+  "/api/comments",
+  verifyToken,
+  [
+    body("post_id").isNumeric(),
+    body("content").isString().notEmpty(),
+    body("publicKey").notEmpty(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const { post_id, content, publicKey } = req.body;
+
+    try {
+      const valid = await verifySignature(
+        content,
+        req.body.signature,
+        publicKey
+      );
+      if (!valid) {
+        return res.status(401).json({ error: "Firma inválida" });
+      }
+
+      const publicKeyString = normalizeJwk(publicKey);
+
+      const insertRes = await pool.query(
+        `INSERT INTO comments (post_id, author_public_key, content)
+         VALUES ($1, $2, $3)
+         RETURNING *`,
+        [post_id, publicKeyString, content]
+      );
+
+      res.status(201).json({ comment: insertRes.rows[0] });
+    } catch (err) {
+      console.error("❌ Error en POST /api/comments:", err);
+      res.status(500).json({ error: "Error al crear comentario" });
+    }
+  }
+);
+
+app.get("/api/comments/:postId", async (req, res) => {
+  const { postId } = req.params;
+
+  // Validación rápida de UUID (v4)
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      postId
+    )
+  ) {
+    return res
+      .status(400)
+      .json({ error: "postId inválido. Debe ser un UUID válido." });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT comments.*, users.username
+       FROM comments
+       JOIN users ON comments.author_public_key = users.public_key
+       WHERE post_id = $1
+       ORDER BY created_at ASC`,
+      [postId]
+    );
+
+    res.json({ comments: result.rows });
+  } catch (err) {
+    console.error("❌ Error en GET /api/comments/:postId:", err);
+    res.status(500).json({ error: "Error al obtener comentarios" });
+  }
+});
+
 // Eliminar post (requiere token)
 app.delete("/posts/:id", verifyToken, async (req, res) => {
   const { id } = req.params;
